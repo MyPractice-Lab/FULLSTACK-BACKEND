@@ -15,7 +15,7 @@
         ┌────────────────────────────┐
         │  EC2 t3.micro "HolaEC2"    │
         │  Amazon Linux 2023         │
-        │  100.54.143.166            │
+        │  54.204.36.158            │
         │                            │
         │  nginx :80                 │
         │   ├── /          → React (archivos estáticos)
@@ -44,7 +44,7 @@ máquina. Como el navegador pide `/api` al mismo origen que la página, **no hay
 | Recurso | Identificador | Notas |
 |---|---|---|
 | EC2 | `i-03e4adbf6dfa52347` ("HolaEC2") | Ya existía; se reutilizó. t3.micro, 1 GB de RAM. |
-| IP pública | `100.54.143.166` | **Cambia si la instancia se detiene y vuelve a arrancar.** |
+| Elastic IP | `54.204.36.158` (`eipalloc-04e283f80a7bd741a`) | **Fija.** Sobrevive a detener y arrancar la instancia. |
 | Security group EC2 | `sg-064b52972b7647e11` | Ya tenía abiertos 22, 80 y 443. |
 | RDS | `thezone-db` | MySQL 8.0, db.t3.micro, 20 GB gp3, sin backups, single-AZ. |
 | Security group RDS | `sg-07471b2cb0765fd9f` | Acepta 3306 **solo desde el SG de la EC2**. |
@@ -78,6 +78,30 @@ Para volver atrás basta devolverle el nombre y recargar nginx.
 **Acceso sin llave.** No había ningún `.pem` a mano para la llave `EC2` de la instancia, así que se
 entró con **EC2 Instance Connect**, que inyecta una llave pública temporal válida por 60 segundos.
 También se asoció `LabInstanceProfile` por si se quisiera usar SSM más adelante.
+
+## 4.bis Por qué un reinicio no obliga a tocar el repositorio
+
+Toda la configuración que cambia entre entornos vive en **variables de entorno del servidor**
+(`/opt/thezone/thezone.env`), no en el código:
+
+| Variable | Valor en producción |
+|---|---|
+| `SPRING_DATASOURCE_URL` | El endpoint DNS de RDS, que **no cambia** al detener y arrancar la base. |
+| `TIENDA_CORS_ORIGENES` | Patrones (`http://*`), así que una IP distinta no rompe nada. |
+| `TIENDA_JWT_SECRETO` | Secreto propio del servidor, distinto al del repositorio. |
+
+El `application.properties` del repositorio sigue apuntando a MySQL local, y está bien: Spring Boot
+da prioridad a las variables de entorno. Por eso **el mismo jar sirve en el PC y en AWS sin
+recompilar**.
+
+Lo demás también es independiente del repositorio:
+
+- `nginx` y `thezone` están habilitados en systemd, así que arrancan solos con la máquina.
+- El swap está en `/etc/fstab`.
+- El frontend compilado pide `/api` en **ruta relativa**, nunca una IP escrita a mano.
+
+Esto se comprobó reiniciando la máquina entera: volvió sola en 46 segundos y todo respondía sin
+intervención.
 
 ## 5. Operación
 
@@ -127,6 +151,7 @@ Todo lo siguiente se comprobó contra la IP pública, no en local:
 | `/admin` (ruta de React Router) | 200 |
 | Navegador real: portada y catálogo | 12 tarjetas, sin errores en consola |
 | Navegador real: login y sesión tras F5 | Se mantiene en `/admin` |
+| **Reinicio completo de la máquina** | Todo vuelve solo en 46 s: nginx, backend, swap y datos |
 
 ## 7. Limitaciones del Learner Lab
 
@@ -135,9 +160,8 @@ Esto es importante para planificar la defensa:
 - **Las credenciales del CLI caducan** al cerrar la sesión del laboratorio y cambian en cada
   arranque.
 - **Al terminar la sesión del lab, la EC2 se detiene.** Hay que arrancarla de nuevo desde la
-  consola, y entonces **la IP pública cambia**: habrá que actualizar `TIENDA_CORS_ORIGENES` en
-  `/opt/thezone/thezone.env` y reiniciar el servicio. Una Elastic IP lo evitaría, si el lab la
-  permite.
+  consola de EC2 (botón *Start instance*). **La IP no cambia**, porque se asoció una Elastic IP, y
+  los servicios levantan solos: no hay que tocar nada ni modificar el repositorio.
 - **El presupuesto es acotado.** Conviene detener la EC2 y la RDS cuando no se usen.
 - Para la presentación: levantar el lab con anticipación y verificar que
   `http://<ip>/api/categorias` responda **antes** de empezar.
